@@ -17,19 +17,28 @@ export interface NodePingStatsState {
   hasData: boolean
 }
 
-interface PingRecord {
+export interface PingRecord {
   client: string
   task_id: number
   time: string
   value: number
 }
 
+export interface PingTask {
+  id: number
+  name: string
+  type?: string
+  default_on?: boolean
+}
+
 interface SharedPingRecordsResponse {
   records?: PingRecord[]
+  tasks?: PingTask[]
 }
 
 interface SharedPingRecordsState {
   recordsByClient: Map<string, PingRecord[]>
+  tasks: PingTask[]
 }
 
 interface SharedPingRecordsEntry {
@@ -227,6 +236,7 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
 
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),
+        tasks: result?.tasks ?? [],
       }
       entry.lastFetchedAt = Date.now()
     }
@@ -542,5 +552,13 @@ export function useNodePingStats(
     avgLoss: computed(() => stats.value.avgLoss),
     avgVolatility: computed(() => stats.value.avgVolatility),
     hasData: computed(() => stats.value.hasData),
+    records: computed(() => {
+      const { uuid: nodeUuid, hours } = resolved.value
+      return getSharedPingRecordsEntry(hours).data.value?.recordsByClient.get(nodeUuid) ?? []
+    }),
+    tasks: computed(() => {
+      const { hours } = resolved.value
+      return getSharedPingRecordsEntry(hours).data.value?.tasks ?? []
+    }),
   }
 }

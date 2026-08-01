@@ -1,10 +1,10 @@
 <script setup lang="ts">
+import type { NetworkProtocol } from '@/composables/useNodePingDisplay'
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { CardX } from '@/components/ui/card-x'
-import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
 import { useNodePingDisplay } from '@/composables/useNodePingDisplay'
 import { useAppStore } from '@/stores/app'
@@ -32,7 +32,6 @@ const nodeCardMetricGridClass = 'grid-cols-3'
 const nodeCardMetricBoxClass = computed(() => appStore.nodeCardSize === 'compact'
   ? 'px-1.5 py-1.5'
   : 'px-2 py-1.5')
-const nodeCardPanelClass = computed(() => appStore.nodeCardSize === 'large' ? 'h-14' : appStore.nodeCardSize === 'comfortable' ? 'h-12' : 'h-11')
 
 const formatBytes = (bytes: number) => formatBytesWithConfig(bytes, appStore.byteDecimals)
 const formatBytesPerSecond = (bytes: number) => formatBytesPerSecondWithConfig(bytes, appStore.byteDecimals)
@@ -44,14 +43,44 @@ const memStatus = computed(() => getStatus(memPercentage.value))
 const diskPercentage = computed(() => getDiskPercentage(props.node))
 const diskStatus = computed(() => getStatus(diskPercentage.value))
 
+const selectedProtocol = ref<NetworkProtocol>('ipv4')
 const {
-  latencyRenderBars,
-  lossRenderBars,
-  latencyDisplay,
-  lossDisplay,
-  latencyPanelTooltip,
-  lossPanelTooltip,
-} = useNodePingDisplay(() => props.node.uuid)
+  qualityRows,
+  detectedProtocols,
+  hasSelectedProtocolData,
+  pingStats,
+} = useNodePingDisplay(() => props.node.uuid, selectedProtocol)
+
+const parsedNodeTags = computed(() => parseTags(props.node.tags))
+
+function hasNetworkTag(tag: string): boolean {
+  return parsedNodeTags.value.some(item => item.text.trim().toLowerCase() === tag)
+}
+
+function isWarpProtocol(protocol: NetworkProtocol): boolean {
+  return hasNetworkTag(`warp:${protocol}`)
+}
+
+const availableProtocols = computed<NetworkProtocol[]>(() => {
+  const protocols = new Set<NetworkProtocol>(detectedProtocols.value)
+  if (props.node.ipv4?.trim())
+    protocols.add('ipv4')
+  if (props.node.ipv6?.trim())
+    protocols.add('ipv6')
+  return (['ipv4', 'ipv6'] as const).filter(protocol => protocols.has(protocol))
+})
+
+watch(availableProtocols, (protocols) => {
+  if (!protocols.includes(selectedProtocol.value))
+    selectedProtocol.value = protocols.includes('ipv4') ? 'ipv4' : 'ipv6'
+}, { immediate: true })
+
+function getProtocolTitle(protocol: NetworkProtocol): string {
+  const label = protocol === 'ipv4' ? 'IPv4' : 'IPv6'
+  if (isWarpProtocol(protocol))
+    return `${label} 通过 WARP 出口`
+  return `${label} 网络质量`
+}
 
 const trafficUsedPercentage = computed(() => getTrafficUsedPercentage(props.node))
 const trafficUsed = computed(() => getTrafficUsed(props.node))
@@ -127,7 +156,9 @@ const remainingInfoTags = computed<RemainingInfoTag[]>(() => {
   return items
 })
 
-const customTags = computed(() => parseTags(props.node.tags).map(t => t.text))
+const customTags = computed(() => parsedNodeTags.value
+  .filter(tag => !tag.text.trim().toLowerCase().startsWith('warp:'))
+  .map(tag => tag.text))
 
 function hasRegion(region: string | null | undefined): boolean {
   return Boolean(region?.trim())
@@ -299,58 +330,100 @@ function hasRegion(region: string | null | undefined): boolean {
           </div>
         </div>
 
-        <!-- 延迟 + 丢包 -->
-        <div class="grid grid-cols-2 gap-1.5">
-          <div
-            class="group/panel relative flex flex-col gap-1.5 p-2 rounded-lg bg-slate-500/5"
-            :class="[nodeCardPanelClass, !props.node.online ? 'blur-xs opacity-50' : '']"
-            :title="latencyPanelTooltip"
-          >
-            <div class="flex items-center justify-between text-[11px] leading-none">
-              <span class="text-muted-foreground">延迟</span>
-              <span class="font-medium">{{ latencyDisplay }}</span>
+        <!-- 网络质量：按协议展示三网最近 20 次真实检测 -->
+        <section
+          class="network-quality-module"
+          :class="!props.node.online ? 'blur-xs opacity-50' : ''"
+          @click.stop
+        >
+          <header class="network-quality-header">
+            <div class="network-quality-title" title="每格表示近期一次真实检测结果">
+              <span>网络质量</span>
+              <Icon icon="lucide:info" width="13" height="13" />
             </div>
-            <div
-              class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100"
-              :style="{ gridTemplateColumns: `repeat(${latencyRenderBars.length}, minmax(0, 1fr))` }"
-            >
-              <DataTooltip
-                v-for="bar in latencyRenderBars" :key="bar.key"
-                placement="top" :content="bar.tooltip" class="h-full w-full"
-              >
-                <span
-                  class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-160 group-hover/panel:opacity-60 group-hover/data-tooltip:!opacity-100"
-                  :class="bar.className"
-                />
-              </DataTooltip>
-            </div>
-          </div>
 
-          <div
-            class="group/panel relative flex flex-col gap-1.5 p-2 rounded-lg bg-slate-500/5"
-            :class="[nodeCardPanelClass, !props.node.online ? 'blur-xs opacity-50' : '']"
-            :title="lossPanelTooltip"
-          >
-            <div class="flex items-center justify-between text-[11px] leading-none">
-              <span class="text-muted-foreground">丢包</span>
-              <span class="font-medium">{{ lossDisplay }}</span>
-            </div>
-            <div
-              class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100"
-              :style="{ gridTemplateColumns: `repeat(${lossRenderBars.length}, minmax(0, 1fr))` }"
-            >
-              <DataTooltip
-                v-for="bar in lossRenderBars" :key="bar.key"
-                placement="top" :content="bar.tooltip" class="h-full w-full"
+            <div v-if="availableProtocols.length" class="network-protocol-switch" role="tablist" aria-label="网络协议">
+              <button
+                v-for="protocol in availableProtocols"
+                :key="protocol"
+                type="button"
+                class="network-protocol-button notranslate"
+                translate="no"
+                :class="selectedProtocol === protocol ? 'is-active' : ''"
+                :title="getProtocolTitle(protocol)"
+                :aria-selected="selectedProtocol === protocol"
+                @click.stop="selectedProtocol = protocol"
               >
-                <span
-                  class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-160 group-hover/panel:opacity-60 group-hover/data-tooltip:!opacity-100"
-                  :class="bar.className"
-                />
-              </DataTooltip>
+                <span>{{ protocol === 'ipv4' ? 'IPv4' : 'IPv6' }}</span>
+                <span v-if="isWarpProtocol(protocol)" class="network-warp-badge">
+                  WARP
+                </span>
+              </button>
             </div>
+          </header>
+
+          <div v-if="!availableProtocols.length" class="network-quality-empty">
+            暂无网络质量数据
           </div>
-        </div>
+          <div v-else-if="!hasSelectedProtocolData" class="network-quality-empty">
+            {{ pingStats.loading.value ? '正在加载检测数据' : '等待检测数据' }}
+          </div>
+          <template v-else>
+            <div class="network-quality-panels">
+              <div class="network-quality-panel">
+                <div class="network-quality-panel-title">
+                  延迟
+                </div>
+                <div v-for="row in qualityRows" :key="`latency-${row.carrier}`" class="network-quality-row">
+                  <div class="network-quality-carrier">
+                    <span class="network-quality-dot" :class="row.dotClass" />
+                    <span>{{ row.label }}</span>
+                  </div>
+                  <span class="network-quality-value">{{ row.latencyDisplay }}</span>
+                  <div class="network-quality-bars" :aria-label="`${row.label}延迟历史`">
+                    <span
+                      v-for="bar in row.latencyBars"
+                      :key="bar.key"
+                      class="network-quality-bar"
+                      :class="bar.className"
+                      :title="bar.tooltip"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="network-quality-panel">
+                <div class="network-quality-panel-title">
+                  丢包
+                </div>
+                <div v-for="row in qualityRows" :key="`loss-${row.carrier}`" class="network-quality-row">
+                  <div class="network-quality-carrier">
+                    <span class="network-quality-dot" :class="row.dotClass" />
+                    <span>{{ row.label }}</span>
+                  </div>
+                  <span class="network-quality-value">{{ row.lossDisplay }}</span>
+                  <div class="network-quality-bars" :aria-label="`${row.label}丢包历史`">
+                    <span
+                      v-for="bar in row.lossBars"
+                      :key="bar.key"
+                      class="network-quality-bar"
+                      :class="bar.className"
+                      :title="bar.tooltip"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <footer class="network-quality-legend">
+              <span><i class="bg-emerald-500/90" />优秀</span>
+              <span><i class="bg-lime-500/90" />良好</span>
+              <span><i class="bg-yellow-400/90" />一般</span>
+              <span><i class="bg-orange-500/90" />较差</span>
+              <span><i class="bg-rose-500/90" />差</span>
+            </footer>
+          </template>
+        </section>
 
         <!-- 自定义标签 -->
         <div v-if="customTags.length > 0" class="flex flex-wrap gap-1">
@@ -384,5 +457,204 @@ function hasRegion(region: string | null | undefined): boolean {
 .node-card {
   position: relative;
   overflow: hidden;
+  container-type: inline-size;
+}
+
+.network-quality-module {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--muted) 24%, transparent);
+  padding: 8px;
+}
+
+.network-quality-header {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
+  padding-bottom: 6px;
+}
+
+.network-quality-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.network-quality-title svg {
+  color: var(--muted-foreground);
+}
+
+.network-protocol-switch {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--muted) 48%, transparent);
+  padding: 2px;
+}
+
+.network-protocol-button {
+  min-width: 38px;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+.network-protocol-button.is-active {
+  background: color-mix(in oklch, var(--color-emerald-500) 15%, transparent);
+  color: var(--color-emerald-500);
+}
+
+.network-warp-badge {
+  border-radius: 999px;
+  padding: 1px 4px;
+  background: color-mix(in oklch, var(--color-violet-500) 17%, transparent);
+  color: var(--color-violet-400);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.network-quality-empty {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.network-quality-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 8px;
+}
+
+.network-quality-panel {
+  min-width: 0;
+  border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--background) 38%, transparent);
+  padding: 8px;
+}
+
+.network-quality-panel-title {
+  margin-bottom: 3px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  padding-bottom: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.network-quality-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'carrier value' 'bars bars';
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 4px;
+  min-width: 0;
+  padding: 5px 0;
+}
+
+.network-quality-carrier {
+  grid-area: carrier;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-size: 11px;
+}
+
+.network-quality-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+}
+
+.network-quality-value {
+  grid-area: value;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 550;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.network-quality-bars {
+  grid-area: bars;
+  display: grid;
+  grid-template-columns: repeat(20, minmax(1px, 1fr));
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 12px;
+}
+
+.network-quality-bar {
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 1.5px;
+}
+
+.network-quality-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 5px 8px;
+  min-width: 0;
+  padding: 7px 0 0;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.network-quality-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.network-quality-legend i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+
+@container (max-width: 330px) {
+  .network-quality-panel {
+    padding-inline: 5px;
+  }
+
+  .network-quality-row {
+    column-gap: 4px;
+    row-gap: 3px;
+  }
+
+  .network-quality-bars {
+    gap: 1px;
+  }
 }
 </style>

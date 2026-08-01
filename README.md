@@ -1,6 +1,6 @@
-<h3 align="center">komari-theme-Glassmorphism</h3>
+<h3 align="center">Komari Glassmorphism Enhanced</h3>
 <p align="center">
-基于 Vue 3 + Vite + reka-ui + Tailwind CSS v4 的 Komari Monitor 毛玻璃主题
+基于 Glassmorphism 二次开发的 Komari Monitor 增强主题
 </p>
 
 ![preview](/docs/preview.png)
@@ -48,6 +48,13 @@ komari-theme-Glassmorphism 是一个为 Komari Monitor 打造的毛玻璃（Glas
 - 迁移至 reka-ui + Tailwind CSS v4，移除 Naive UI 和 UnoCSS
 - 采用 shadcn-vue 组件库设计模式，确保高度可定制性
 - 优化性能和包体积
+
+## 更新内容（v2.2.0）
+
+- **网络质量卡片**：延迟与丢包并排展示，每家运营商使用最近 20 次真实检测结果生成状态条。
+- **IPv4 / IPv6 判定**：同时结合节点地址与真实 Ping 记录，支持单栈、双栈及访客模式下 IP 字段隐藏的情况，同协议多地址自动去重。
+- **WARP 出口标识**：仅当节点明确配置 warp:ipv4 或 warp:ipv6 标签时显示，不根据 IP、ASN 或延迟猜测。
+- **可用性修复**：保留真实 0% 丢包，缺失样本显示为灰色，协议切换按卡片独立保存，并防止浏览器自动翻译 WARP 技术词。
 
 ## 更新内容（v2.1.0）
 
@@ -121,7 +128,7 @@ komari-theme-Glassmorphism 是一个为 Komari Monitor 打造的毛玻璃（Glas
 
 ## 使用
 
-1. 从当前仓库的 [Release 页面](https://github.com/sanrokamlan-prog/komari-theme-Glassmorphism/releases) 下载最新的 `komari-theme-Glassmorphism-build-*.zip` 文件
+1. 从当前仓库的 [Release 页面](https://github.com/jianmomo/komari-theme-Glassmorphism-Enhanced/releases) 下载最新的 `komari-theme-Glassmorphism-build-*.zip` 文件
 2. 登录 Komari Monitor 后，点击"设置"，进入"主题管理"选项卡
 3. 点击"上传主题"，选择下载的 zip 文件
 4. 刷新页面，即可应用主题
@@ -194,6 +201,8 @@ bun run preview
 - 访问者地理位置信息展示
 
 ## 致谢
+
+- Glassmorphism 主题作者：[sanrokamlan](https://github.com/sanrokamlan-prog/komari-theme-Glassmorphism)
 
 - 原始主题作者：Tokinx
 - [Komari](https://github.com/komari-monitor/komari)

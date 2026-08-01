@@ -1,11 +1,11 @@
 {
-  "name": "komari-theme-Glassmorphism",
+  "name": "komari-theme-glassmorphism-enhanced",
   "type": "module",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "packageManager": "bun@1.3.14",
   "author": {
-    "name": "Tokinx",
-    "url": "https://github.com/Tokinx"
+    "name": "jianmomo",
+    "url": "https://github.com/jianmomo"
   },
   "license": "MIT",
   "engines": {
