@@ -1,7 +1,7 @@
 import type { MaybeRefOrGetter } from 'vue'
 import { useThrottleFn } from '@vueuse/core'
 import { computed, onScopeDispose, ref, shallowRef, toValue, watch } from 'vue'
-import { getSharedRpc } from '@/utils/rpc'
+import { getCompatiblePingRecords } from '@/utils/compat'
 
 export interface NodePingHistoryPoint {
   time: string
@@ -29,11 +29,6 @@ export interface PingTask {
   name: string
   type?: string
   default_on?: boolean
-}
-
-interface SharedPingRecordsResponse {
-  records?: PingRecord[]
-  tasks?: PingTask[]
 }
 
 interface SharedPingRecordsState {
@@ -223,16 +218,12 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
   if (entry.promise)
     return entry.promise
 
-  const rpc = getSharedRpc()
   entry.loading.value = true
   entry.error.value = null
 
   entry.promise = (async () => {
     try {
-      const result = await rpc.getClient().call<SharedPingRecordsResponse>('common:getRecords', {
-        type: 'ping',
-        hours,
-      })
+      const result = await getCompatiblePingRecords(undefined, hours)
 
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),

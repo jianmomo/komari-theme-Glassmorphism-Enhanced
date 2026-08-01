@@ -9,8 +9,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppStore } from '@/stores/app'
+import { getCompatiblePingRecords } from '@/utils/compat'
 import { cutPeakValues, interpolateNullsLinear } from '@/utils/recordHelper'
-import { getSharedRpc } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
 
 const props = defineProps<{
@@ -19,8 +19,6 @@ const props = defineProps<{
 
 const appStore = useAppStore()
 const isDark = computed(() => appStore.isDark)
-// 使用共享的 RPC 实例，避免重复创建连接
-const rpc = getSharedRpc()
 
 // 图表主题相关颜色
 const chartThemeColors = computed(() => ({
@@ -125,14 +123,6 @@ interface TaskInfo {
   type?: string
 }
 
-interface PingRecordsResponse {
-  count: number
-  records: PingRecord[]
-  tasks?: TaskInfo[]
-  from?: string
-  to?: string
-}
-
 // 数据状态
 const remoteData = shallowRef<PingRecord[]>([])
 const tasks = shallowRef<TaskInfo[]>([])
@@ -192,11 +182,7 @@ async function fetchRecords() {
   error.value = null
 
   try {
-    const result = await rpc.getClient().call<PingRecordsResponse>('common:getRecords', {
-      uuid: props.uuid,
-      type: 'ping',
-      hours: selectedHours.value,
-    })
+    const result = await getCompatiblePingRecords(props.uuid, selectedHours.value)
 
     const records = result?.records || []
     records.sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf())

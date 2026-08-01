@@ -4,6 +4,8 @@
  * @see https://www.komari.wiki/dev/api.html
  */
 
+import type { Client, NodeStatus } from '@/utils/rpc'
+
 const HTTP_PROTOCOL_REGEX = /^http/
 const HTTPS_PROTOCOL_REGEX = /^https/
 
@@ -161,6 +163,7 @@ export interface LoadRecordsResponse {
 
 /** Ping 历史记录 */
 export interface PingRecord {
+  client?: string
   task_id: number
   time: string
   value: number
@@ -368,16 +371,16 @@ export class KomariApi {
   /**
    * 获取所有节点的基本信息列表
    */
-  async getNodes(): Promise<NodeInfo[]> {
-    return this.get<NodeInfo[]>('/nodes')
+  async getNodes(): Promise<Client[]> {
+    return this.get<Client[]>('/nodes')
   }
 
   /**
    * 获取指定节点最近1分钟的历史数据
    * @param uuid 节点 UUID
    */
-  async getNodeRecentStatus(uuid: string): Promise<RealtimeStatus[]> {
-    return this.get<RealtimeStatus[]>(`/recent/${uuid}`)
+  async getNodeRecentStatus(uuid: string): Promise<Partial<NodeStatus>[]> {
+    return this.get<Partial<NodeStatus>[]>(`/recent/${uuid}`)
   }
 
   // ===== 历史记录 =====

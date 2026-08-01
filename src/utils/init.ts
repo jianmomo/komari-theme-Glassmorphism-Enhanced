@@ -3,11 +3,12 @@
  * 负责应用启动时的初始化流程和 WebSocket 连接管理
  */
 
-import type { Client, KomariRpc, NodeStatus } from '@/utils/rpc'
+import type { KomariRpc } from '@/utils/rpc'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
-import { getSharedRpc, RpcError } from '@/utils/rpc'
+import { checkKomariHealth, getCompatibleNodesSnapshot } from '@/utils/compat'
+import { getSharedRpc } from '@/utils/rpc'
 
 /** 初始化配置 */
 interface InitConfig {
@@ -99,19 +100,9 @@ class InitManager {
    */
   private async healthCheck(): Promise<void> {
     try {
-      const result = await this.rpc.ping()
-      if (result !== 'pong') {
-        throw new RpcError(-32000, 'Unexpected health check response')
-      }
+      await checkKomariHealth(this.config.healthCheckTimeout)
     }
     catch (error) {
-      if (error instanceof RpcError && error.code === 401) {
-        console.warn('[InitManager] Private site detected, redirecting to /admin')
-        this.appStore.updateLoginState(false)
-        this.appStore.loading = false
-        location.href = '/admin'
-        return
-      }
       console.error('[InitManager] Health check failed:', error)
       this.appStore.connectionError = true
       throw new Error('Backend service unavailable')
@@ -154,11 +145,8 @@ class InitManager {
    */
   private async fetchNodesData(): Promise<void> {
     try {
-      // 并行获取节点信息和最新状态
-      const [clientsResult, statusesResult] = await Promise.all([
-        this.rpc.getNodes() as Promise<Record<string, Client>>,
-        this.rpc.getNodesLatestStatus() as Promise<Record<string, NodeStatus>>,
-      ])
+      const { clients: clientsResult, statuses: statusesResult }
+        = await getCompatibleNodesSnapshot()
 
       // 初始化节点数据
       this.nodesStore.initNodes(clientsResult, statusesResult)
@@ -331,12 +319,9 @@ class InitManager {
       const now = Date.now()
       const shouldRefreshClients = now - this.lastClientsFetchedAt >= CLIENTS_REFRESH_INTERVAL_MS
 
-      const [statusesResult, clientsResult] = await Promise.all([
-        this.rpc.getNodesLatestStatus() as Promise<Record<string, NodeStatus>>,
-        shouldRefreshClients
-          ? this.rpc.getNodes() as Promise<Record<string, Client>>
-          : Promise.resolve(null),
-      ])
+      const snapshot = await getCompatibleNodesSnapshot()
+      const statusesResult = snapshot.statuses
+      const clientsResult = shouldRefreshClients ? snapshot.clients : null
 
       if (clientsResult) {
         this.nodesStore.updateNodeClients(clientsResult)
@@ -349,12 +334,7 @@ class InitManager {
       this.appStore.connectionError = false
     }
     catch (error) {
-      if (error instanceof RpcError) {
-        console.error('[InitManager] Poll RPC error:', error.message)
-      }
-      else {
-        console.error('[InitManager] Poll error:', error)
-      }
+      console.error('[InitManager] Poll error:', error)
 
       // 一次失败就显示错误
       this.appStore.connectionError = true
