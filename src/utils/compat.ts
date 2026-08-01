@@ -28,40 +28,96 @@ const RPC_RETRY_INTERVAL_MS = 60_000
 let nodeRpcRetryAt = 0
 let pingRpcRetryAt = 0
 
+interface CompatibleRecentRecord {
+  uuid?: string
+  client?: string
+  time?: string
+  updated_at?: string
+  cpu?: number | { usage?: number }
+  gpu?: number
+  ram?: number | { total?: number, used?: number }
+  ram_total?: number
+  swap?: number | { total?: number, used?: number }
+  swap_total?: number
+  load?: number | { load1?: number, load5?: number, load15?: number }
+  load5?: number
+  load15?: number
+  temp?: number
+  disk?: number | { total?: number, used?: number }
+  disk_total?: number
+  net_in?: number
+  net_out?: number
+  net_total_up?: number
+  net_total_down?: number
+  network?: { up?: number, down?: number, totalUp?: number, totalDown?: number }
+  process?: number
+  connections?: number | { tcp?: number, udp?: number }
+  connections_udp?: number
+  online?: boolean
+  uptime?: number
+  ping?: NodeStatus['ping']
+}
+
 function finite(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function recentTimestamp(record?: CompatibleRecentRecord): number {
+  const value = record?.time || record?.updated_at
+  const timestamp = value ? new Date(value).getTime() : 0
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function latestRecentRecord(records: unknown[]): CompatibleRecentRecord | undefined {
+  return records
+    .filter((record): record is CompatibleRecentRecord => Boolean(record && typeof record === 'object'))
+    .reduce<CompatibleRecentRecord | undefined>((latest, record) => {
+      return !latest || recentTimestamp(record) >= recentTimestamp(latest) ? record : latest
+    }, undefined)
 }
 
 function toClientMap(nodes: Client[]): Record<string, Client> {
   return Object.fromEntries(nodes.filter(node => Boolean(node?.uuid)).map(node => [node.uuid, node]))
 }
 
-function normalizeLegacyStatus(uuid: string, record?: Partial<NodeStatus>): NodeStatus {
-  const timestamp = record?.time ? new Date(record.time).getTime() : 0
-  const online = Number.isFinite(timestamp) && timestamp > 0 && Date.now() - timestamp < 90_000
+function normalizeLegacyStatus(uuid: string, record?: CompatibleRecentRecord): NodeStatus {
+  const timestamp = recentTimestamp(record)
+  const online = record?.online ?? (timestamp > 0 && Date.now() - timestamp < 90_000)
+  const cpu = typeof record?.cpu === 'object' ? record.cpu.usage : record?.cpu
+  const ram = typeof record?.ram === 'object' ? record.ram.used : record?.ram
+  const ramTotal = typeof record?.ram === 'object' ? record.ram.total : record?.ram_total
+  const swap = typeof record?.swap === 'object' ? record.swap.used : record?.swap
+  const swapTotal = typeof record?.swap === 'object' ? record.swap.total : record?.swap_total
+  const load = typeof record?.load === 'object' ? record.load.load1 : record?.load
+  const load5 = typeof record?.load === 'object' ? record.load.load5 : record?.load5
+  const load15 = typeof record?.load === 'object' ? record.load.load15 : record?.load15
+  const disk = typeof record?.disk === 'object' ? record.disk.used : record?.disk
+  const diskTotal = typeof record?.disk === 'object' ? record.disk.total : record?.disk_total
+  const connections = typeof record?.connections === 'object' ? record.connections.tcp : record?.connections
+  const connectionsUdp = typeof record?.connections === 'object' ? record.connections.udp : record?.connections_udp
 
   return {
-    client: record?.client || uuid,
-    time: record?.time || '',
-    cpu: finite(record?.cpu),
+    client: record?.client || record?.uuid || uuid,
+    time: record?.time || record?.updated_at || '',
+    cpu: finite(cpu),
     gpu: finite(record?.gpu),
-    ram: finite(record?.ram),
-    ram_total: finite(record?.ram_total),
-    swap: finite(record?.swap),
-    swap_total: finite(record?.swap_total),
-    load: finite(record?.load),
-    load5: finite(record?.load5),
-    load15: finite(record?.load15),
+    ram: finite(ram),
+    ram_total: finite(ramTotal),
+    swap: finite(swap),
+    swap_total: finite(swapTotal),
+    load: finite(load),
+    load5: finite(load5),
+    load15: finite(load15),
     temp: finite(record?.temp),
-    disk: finite(record?.disk),
-    disk_total: finite(record?.disk_total),
-    net_in: finite(record?.net_in),
-    net_out: finite(record?.net_out),
-    net_total_up: finite(record?.net_total_up),
-    net_total_down: finite(record?.net_total_down),
+    disk: finite(disk),
+    disk_total: finite(diskTotal),
+    net_in: finite(record?.network?.down ?? record?.net_in),
+    net_out: finite(record?.network?.up ?? record?.net_out),
+    net_total_up: finite(record?.network?.totalUp ?? record?.net_total_up),
+    net_total_down: finite(record?.network?.totalDown ?? record?.net_total_down),
     process: finite(record?.process),
-    connections: finite(record?.connections),
-    connections_udp: finite(record?.connections_udp),
+    connections: finite(connections),
+    connections_udp: finite(connectionsUdp),
     online,
     uptime: finite(record?.uptime),
     ping: record?.ping,
@@ -76,8 +132,8 @@ async function getRestNodesSnapshot(): Promise<CompatibleNodesSnapshot> {
 
   const recentResults = await Promise.allSettled(
     nodeList.map(async (node) => {
-      const records = await api.getNodeRecentStatus(node.uuid)
-      const latest = records.at(-1)
+      const records = await api.getNodeRecentStatus(node.uuid) as unknown[]
+      const latest = latestRecentRecord(records)
       return [node.uuid, normalizeLegacyStatus(node.uuid, latest)] as const
     }),
   )
