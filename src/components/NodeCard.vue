@@ -43,15 +43,22 @@ const memStatus = computed(() => getStatus(memPercentage.value))
 const diskPercentage = computed(() => getDiskPercentage(props.node))
 const diskStatus = computed(() => getStatus(diskPercentage.value))
 
+const TUNNEL_TAG_PREFIX = 'tunnel:9929:'
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const parsedNodeTags = computed(() => parseTags(props.node.tags))
+const tunnelSourceUuid = computed(() => {
+  const tag = parsedNodeTags.value.find(item => item.text.trim().toLowerCase().startsWith(TUNNEL_TAG_PREFIX))
+  const uuid = tag?.text.trim().slice(TUNNEL_TAG_PREFIX.length) ?? ''
+  return UUID_PATTERN.test(uuid) ? uuid : ''
+})
+
 const selectedProtocol = ref<NetworkProtocol>('ipv4')
 const {
   qualityRows,
   detectedProtocols,
   hasSelectedProtocolData,
-  pingStats,
-} = useNodePingDisplay(() => props.node.uuid, selectedProtocol)
-
-const parsedNodeTags = computed(() => parseTags(props.node.tags))
+  selectedProtocolLoading,
+} = useNodePingDisplay(() => props.node.uuid, selectedProtocol, { tunnelSourceUuid })
 
 function hasNetworkTag(tag: string): boolean {
   return parsedNodeTags.value.some(item => item.text.trim().toLowerCase() === tag)
@@ -62,12 +69,16 @@ function isWarpProtocol(protocol: NetworkProtocol): boolean {
 }
 
 const availableProtocols = computed<NetworkProtocol[]>(() => {
-  const protocols = new Set<NetworkProtocol>(detectedProtocols.value)
+  const protocols = new Set<NetworkProtocol>(
+    detectedProtocols.value.filter(protocol => protocol !== 'ipv4-9929' || tunnelSourceUuid.value),
+  )
   if (props.node.ipv4?.trim())
     protocols.add('ipv4')
+  if (tunnelSourceUuid.value)
+    protocols.add('ipv4-9929')
   if (props.node.ipv6?.trim())
     protocols.add('ipv6')
-  return (['ipv4', 'ipv6'] as const).filter(protocol => protocols.has(protocol))
+  return (['ipv4', 'ipv6', 'ipv4-9929'] as const).filter(protocol => protocols.has(protocol))
 })
 
 watch(availableProtocols, (protocols) => {
@@ -76,6 +87,8 @@ watch(availableProtocols, (protocols) => {
 }, { immediate: true })
 
 function getProtocolTitle(protocol: NetworkProtocol): string {
+  if (protocol === 'ipv4-9929')
+    return 'IPv4 9929线路隧道：三网线路段与 WireGuard 隧道段的同期组合结果'
   const label = protocol === 'ipv4' ? 'IPv4' : 'IPv6'
   if (isWarpProtocol(protocol))
     return `${label} 通过 WARP 出口`
@@ -157,7 +170,10 @@ const remainingInfoTags = computed<RemainingInfoTag[]>(() => {
 })
 
 const customTags = computed(() => parsedNodeTags.value
-  .filter(tag => !tag.text.trim().toLowerCase().startsWith('warp:'))
+  .filter((tag) => {
+    const normalized = tag.text.trim().toLowerCase()
+    return !normalized.startsWith('warp:') && !normalized.startsWith('tunnel:')
+  })
   .map(tag => tag.text))
 
 function hasRegion(region: string | null | undefined): boolean {
@@ -349,13 +365,19 @@ function hasRegion(region: string | null | undefined): boolean {
                 type="button"
                 class="network-protocol-button notranslate"
                 translate="no"
-                :class="selectedProtocol === protocol ? 'is-active' : ''"
+                :class="[
+                  selectedProtocol === protocol ? 'is-active' : '',
+                  protocol === 'ipv4-9929' ? 'is-tunnel' : '',
+                ]"
                 :title="getProtocolTitle(protocol)"
                 :aria-selected="selectedProtocol === protocol"
                 @click.stop="selectedProtocol = protocol"
               >
-                <span>{{ protocol === 'ipv4' ? 'IPv4' : 'IPv6' }}</span>
-                <span v-if="isWarpProtocol(protocol)" class="network-warp-badge">
+                <span>{{ protocol === 'ipv6' ? 'IPv6' : 'IPv4' }}</span>
+                <span v-if="protocol === 'ipv4-9929'" class="network-tunnel-badge">
+                  · 隧道
+                </span>
+                <span v-else-if="isWarpProtocol(protocol)" class="network-warp-badge">
                   WARP
                 </span>
               </button>
@@ -366,7 +388,7 @@ function hasRegion(region: string | null | undefined): boolean {
             暂无网络质量数据
           </div>
           <div v-else-if="!hasSelectedProtocolData" class="network-quality-empty">
-            {{ pingStats.loading.value ? '正在加载检测数据' : '等待检测数据' }}
+            {{ selectedProtocolLoading ? '正在加载检测数据' : '等待检测数据' }}
           </div>
           <template v-else>
             <div class="network-quality-panels">
@@ -511,9 +533,15 @@ function hasRegion(region: string | null | undefined): boolean {
   color: var(--muted-foreground);
   font-size: 10px;
   line-height: 1;
+  white-space: nowrap;
   transition:
     color 150ms ease,
     background-color 150ms ease;
+}
+
+.network-protocol-button.is-tunnel {
+  gap: 3px;
+  padding-inline: 5px;
 }
 
 .network-protocol-button.is-active {
@@ -521,7 +549,8 @@ function hasRegion(region: string | null | undefined): boolean {
   color: var(--color-emerald-500);
 }
 
-.network-warp-badge {
+.network-warp-badge,
+.network-tunnel-badge {
   border-radius: 999px;
   padding: 1px 4px;
   background: color-mix(in oklch, var(--color-violet-500) 17%, transparent);
@@ -529,6 +558,15 @@ function hasRegion(region: string | null | undefined): boolean {
   font-size: 7px;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.network-tunnel-badge {
+  padding-inline: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .network-quality-empty {

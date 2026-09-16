@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/helper'
 
 export type NodePingMetric = 'latency' | 'loss'
-export type NetworkProtocol = 'ipv4' | 'ipv6'
+export type NetworkProtocol = 'ipv4' | 'ipv4-9929' | 'ipv6'
 export type NetworkCarrier = 'mobile' | 'unicom' | 'telecom'
 
 export interface NodePingBar {
@@ -31,10 +31,13 @@ export interface NodeNetworkQualityRow {
 
 interface UseNodePingDisplayOptions {
   historyHours?: number
+  tunnelSourceUuid?: MaybeRefOrGetter<string | null | undefined>
 }
 
 const HISTORY_SAMPLE_COUNT = 20
+const TUNNEL_PAIR_WINDOW_MS = 45_000
 const IPV6_TASK_PATTERN = /ipv6|\bv6\b/i
+const TUNNEL_TASK_PATTERN = /^9929线路隧道$/
 
 const CARRIERS: Array<{
   carrier: NetworkCarrier
@@ -78,6 +81,8 @@ function average(values: number[]): number | null {
 }
 
 function getTaskProtocol(task: PingTask): NetworkProtocol {
+  if (TUNNEL_TASK_PATTERN.test(task.name))
+    return 'ipv4-9929'
   return IPV6_TASK_PATTERN.test(task.name) ? 'ipv6' : 'ipv4'
 }
 
@@ -120,14 +125,11 @@ function buildMetricBars(records: PingRecord[], metric: NodePingMetric): NodePin
   return [...buildEmptyBars(metric, missingCount), ...bars]
 }
 
-function buildRow(
+function buildRowFromRecords(
   carrierConfig: typeof CARRIERS[number],
-  protocol: NetworkProtocol,
-  tasks: PingTask[],
-  records: PingRecord[],
+  taskName: string | null,
+  taskRecords: PingRecord[],
 ): NodeNetworkQualityRow {
-  const task = tasks.find(item => getTaskProtocol(item) === protocol && carrierConfig.matcher.test(item.name))
-  const taskRecords = task ? records.filter(record => record.task_id === task.id) : []
   const successfulValues = taskRecords.filter(record => record.value >= 0).map(record => record.value)
   const latency = average(successfulValues)
   const loss = taskRecords.length
@@ -138,7 +140,7 @@ function buildRow(
     carrier: carrierConfig.carrier,
     label: carrierConfig.label,
     dotClass: carrierConfig.dotClass,
-    taskName: task?.name ?? null,
+    taskName,
     latency,
     loss,
     latencyDisplay: latency === null ? '—' : `${Math.round(latency)} ms`,
@@ -147,6 +149,76 @@ function buildRow(
     lossBars: buildMetricBars(taskRecords, 'loss'),
     hasData: taskRecords.length > 0,
   }
+}
+
+function buildRow(
+  carrierConfig: typeof CARRIERS[number],
+  protocol: Exclude<NetworkProtocol, 'ipv4-9929'>,
+  tasks: PingTask[],
+  records: PingRecord[],
+): NodeNetworkQualityRow {
+  const task = tasks.find(item => getTaskProtocol(item) === protocol && carrierConfig.matcher.test(item.name))
+  const taskRecords = task ? records.filter(record => record.task_id === task.id) : []
+  return buildRowFromRecords(carrierConfig, task?.name ?? null, taskRecords)
+}
+
+function combineTunnelRecords(
+  carrierRecords: PingRecord[],
+  tunnelRecords: PingRecord[],
+): PingRecord[] {
+  const timedTunnelRecords = tunnelRecords
+    .map(record => ({ record, timestamp: new Date(record.time).getTime() }))
+    .filter(item => Number.isFinite(item.timestamp))
+
+  return carrierRecords.flatMap((carrierRecord) => {
+    const carrierTimestamp = new Date(carrierRecord.time).getTime()
+    if (!Number.isFinite(carrierTimestamp))
+      return []
+
+    let nearest: typeof timedTunnelRecords[number] | null = null
+    let nearestDistance = Number.POSITIVE_INFINITY
+    for (const candidate of timedTunnelRecords) {
+      const distance = Math.abs(candidate.timestamp - carrierTimestamp)
+      if (distance <= TUNNEL_PAIR_WINDOW_MS && distance < nearestDistance) {
+        nearest = candidate
+        nearestDistance = distance
+      }
+    }
+
+    if (!nearest)
+      return []
+
+    return [{
+      client: carrierRecord.client,
+      task_id: carrierRecord.task_id,
+      time: carrierRecord.time,
+      value: carrierRecord.value < 0 || nearest.record.value < 0
+        ? -1
+        : carrierRecord.value + nearest.record.value,
+    }]
+  })
+}
+
+function buildTunnelRow(
+  carrierConfig: typeof CARRIERS[number],
+  tasks: PingTask[],
+  carrierSourceRecords: PingRecord[],
+  tunnelNodeRecords: PingRecord[],
+): NodeNetworkQualityRow {
+  const carrierTask = tasks.find(item => getTaskProtocol(item) === 'ipv4'
+    && carrierConfig.matcher.test(item.name))
+  const tunnelTask = tasks.find(item => TUNNEL_TASK_PATTERN.test(item.name))
+  if (!carrierTask || !tunnelTask)
+    return buildRowFromRecords(carrierConfig, carrierTask?.name ?? null, [])
+
+  const carrierRecords = carrierSourceRecords.filter(record => record.task_id === carrierTask.id)
+  const tunnelRecords = tunnelNodeRecords.filter(record => record.task_id === tunnelTask.id)
+  const combinedRecords = combineTunnelRecords(carrierRecords, tunnelRecords)
+  return buildRowFromRecords(
+    carrierConfig,
+    `${carrierTask.name} + ${tunnelTask.name}`,
+    combinedRecords,
+  )
 }
 
 export function useNodePingDisplay(
@@ -172,12 +244,30 @@ export function useNodePingDisplay(
     enabled: pingStatsEnabled,
   })
 
-  const qualityRows = computed(() => CARRIERS.map(carrier => buildRow(
-    carrier,
-    toValue(protocol),
-    pingStats.tasks.value,
-    pingStats.records.value,
-  )))
+  const tunnelSourceUuid = () => toValue(options.tunnelSourceUuid) ?? ''
+  const tunnelSourcePingStats = useNodePingStats(tunnelSourceUuid, {
+    hours: pingStatsHours,
+    enabled: computed(() => pingStatsEnabled.value && Boolean(tunnelSourceUuid().trim())),
+  })
+
+  const qualityRows = computed(() => {
+    const selectedProtocol = toValue(protocol)
+    if (selectedProtocol === 'ipv4-9929') {
+      return CARRIERS.map(carrier => buildTunnelRow(
+        carrier,
+        pingStats.tasks.value,
+        tunnelSourcePingStats.records.value,
+        pingStats.records.value,
+      ))
+    }
+
+    return CARRIERS.map(carrier => buildRow(
+      carrier,
+      selectedProtocol,
+      pingStats.tasks.value,
+      pingStats.records.value,
+    ))
+  })
 
   // IP 字段在访客模式下可能被 Komari 隐藏，因此同时从真实记录反推协议能力。
   // 同一协议即使对应多个地址或任务，也只生成一个协议标签。
@@ -193,10 +283,13 @@ export function useNodePingDisplay(
         protocols.add(taskProtocol)
     }
 
-    return (['ipv4', 'ipv6'] as const).filter(protocol => protocols.has(protocol))
+    return (['ipv4', 'ipv4-9929', 'ipv6'] as const).filter(protocol => protocols.has(protocol))
   })
 
   const hasSelectedProtocolData = computed(() => qualityRows.value.some(row => row.hasData))
+  const selectedProtocolLoading = computed(() => toValue(protocol) === 'ipv4-9929'
+    ? pingStats.loading.value || tunnelSourcePingStats.loading.value
+    : pingStats.loading.value)
 
   // 列表视图继续复用原有汇总历史，不改变其紧凑展示语义。
   const latencyRenderBars = computed(() => {
@@ -229,6 +322,8 @@ export function useNodePingDisplay(
 
   return {
     pingStats,
+    tunnelSourcePingStats,
+    selectedProtocolLoading,
     pingStatsEnabled,
     pingStatsHours,
     qualityRows,
