@@ -22,6 +22,8 @@ export interface PingRecord {
   task_id: number
   time: string
   value: number
+  loss_rate?: number
+  sample_count?: number
 }
 
 export interface PingTask {
@@ -47,7 +49,7 @@ interface SharedPingRecordsEntry {
 }
 
 const HISTORY_BUCKET_COUNT = 20
-const CACHE_VERSION = 5
+const CACHE_VERSION = 6
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
 const PING_RECORD_REFRESH_INTERVAL_MS = 60_000
@@ -98,7 +100,7 @@ function getIncludedTaskIds(records: PingRecord[]): Set<number> {
 
   return new Set(
     [...recordSummaries.entries()]
-      .filter(([, summary]) => summary.total > 0 && summary.success > 0)
+      .filter(([, summary]) => summary.total > 0)
       .map(([taskId]) => taskId),
   )
 }
@@ -312,13 +314,18 @@ function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
         break
 
       if (record.timestamp >= startTime) {
-        totalCount += 1
+        const sampleCount = Number.isFinite(record.sample_count) && record.sample_count && record.sample_count > 0
+          ? Math.floor(record.sample_count)
+          : 1
+        const lossRate = Number.isFinite(record.loss_rate)
+          ? Math.min(1, Math.max(0, record.loss_rate ?? 0))
+          : record.value < 0 ? 1 : 0
+        const failedSamples = Math.min(sampleCount, Math.round(sampleCount * lossRate))
+        totalCount += sampleCount
+        lostCount += failedSamples
         if (record.value >= 0) {
-          latencySum += record.value
-          latencyCount += 1
-        }
-        else {
-          lostCount += 1
+          latencySum += record.value * (sampleCount - failedSamples)
+          latencyCount += sampleCount - failedSamples
         }
       }
       recordIndex += 1
@@ -374,15 +381,30 @@ function buildStats(records: PingRecord[]): NodePingStatsState {
   const volatilityValues: number[] = []
 
   for (const recordsByTask of taskRecords.values()) {
+    const totalSamples = recordsByTask.reduce((sum, record) => sum + (
+      Number.isFinite(record.sample_count) && record.sample_count && record.sample_count > 0
+        ? Math.floor(record.sample_count)
+        : 1
+    ), 0)
     const validValues = recordsByTask
       .map(record => record.value)
       .filter(value => value >= 0)
+
+    const failedSamples = recordsByTask.reduce((sum, record) => {
+      const sampleCount = Number.isFinite(record.sample_count) && record.sample_count && record.sample_count > 0
+        ? Math.floor(record.sample_count)
+        : 1
+      const lossRate = Number.isFinite(record.loss_rate)
+        ? Math.min(1, Math.max(0, record.loss_rate ?? 0))
+        : record.value < 0 ? 1 : 0
+      return sum + Math.min(sampleCount, Math.round(sampleCount * lossRate))
+    }, 0)
+    taskLossValues.push(totalSamples ? failedSamples / totalSamples * 100 : 0)
 
     if (!validValues.length)
       continue
 
     latencyValues.push(average(validValues))
-    taskLossValues.push((recordsByTask.length - validValues.length) / recordsByTask.length * 100)
 
     if (validValues.length > 1) {
       const p50 = getPercentile(validValues, 0.5)

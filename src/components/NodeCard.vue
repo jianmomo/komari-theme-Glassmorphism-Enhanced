@@ -353,7 +353,7 @@ function hasRegion(region: string | null | undefined): boolean {
           @click.stop
         >
           <header class="network-quality-header">
-            <div class="network-quality-title" title="每格表示近期一次真实检测结果">
+            <div class="network-quality-title" title="每格表示一个采样时间段；失败率是 TCP 连接失败比例">
               <span>网络质量</span>
               <Icon icon="lucide:info" width="13" height="13" />
             </div>
@@ -416,7 +416,7 @@ function hasRegion(region: string | null | undefined): boolean {
 
               <div class="network-quality-panel">
                 <div class="network-quality-panel-title">
-                  丢包
+                  TCP 探测失败率
                 </div>
                 <div v-for="row in qualityRows" :key="`loss-${row.carrier}`" class="network-quality-row">
                   <div class="network-quality-carrier">
@@ -424,7 +424,7 @@ function hasRegion(region: string | null | undefined): boolean {
                     <span>{{ row.label }}</span>
                   </div>
                   <span class="network-quality-value">{{ row.lossDisplay }}</span>
-                  <div class="network-quality-bars" :aria-label="`${row.label}丢包历史`">
+                  <div class="network-quality-bars" :aria-label="`${row.label} TCP 探测失败率历史`">
                     <span
                       v-for="bar in row.lossBars"
                       :key="bar.key"

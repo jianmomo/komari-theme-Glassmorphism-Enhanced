@@ -120,6 +120,7 @@ interface TaskInfo {
   avg?: number
   latest?: number
   total?: number
+  valid?: number
   type?: string
 }
 
@@ -324,7 +325,7 @@ function getTaskColor(taskId: number): string {
   return chartColors[safeIndex]!
 }
 
-// 最新值统计（从服务端 tasks 获取，保持颜色顺序）
+// 最新探测结果以按时间排序的记录为准；服务端任务摘要可能返回较早的聚合桶。
 const latestValues = computed(() => {
   if (!tasks.value.length)
     return []
@@ -333,7 +334,7 @@ const latestValues = computed(() => {
   for (const task of tasks.value) {
     for (let i = remoteData.value.length - 1; i >= 0; i--) {
       const rec = remoteData.value[i]
-      if (rec && rec.task_id === task.id && rec.value >= 0) {
+      if (rec && rec.task_id === task.id) {
         latestMap.set(task.id, rec.value)
         break
       }
@@ -345,6 +346,9 @@ const latestValues = computed(() => {
     return {
       ...task,
       latestValue: latestMap.get(task.id) ?? null,
+      hasSuccess: task.valid !== undefined
+        ? task.valid > 0
+        : task.loss < 100 && task.total !== 0,
       color: chartColors[safeIdx]!,
     }
   })
@@ -622,27 +626,27 @@ onBeforeUnmount(() => {
                     </TooltipTrigger>
                     <TooltipContent class="!rounded p-3">
                       <div class="text-xs gap-x-4 gap-y-1.5 grid grid-cols-4">
-                        <template v-if="task.min !== undefined">
+                        <template v-if="task.hasSuccess && task.min !== undefined && task.min >= 0">
                           <span class="text-muted-foreground">最小</span>
                           <span class="font-medium">{{ Math.round(task.min) }} ms</span>
                         </template>
-                        <template v-if="task.max !== undefined">
+                        <template v-if="task.hasSuccess && task.max !== undefined && task.max >= 0">
                           <span class="text-muted-foreground">最大</span>
                           <span class="font-medium">{{ Math.round(task.max) }} ms</span>
                         </template>
-                        <template v-if="task.avg !== undefined">
+                        <template v-if="task.hasSuccess && task.avg !== undefined">
                           <span class="text-muted-foreground">平均</span>
                           <span class="font-medium">{{ Math.round(task.avg) }} ms</span>
                         </template>
-                        <template v-if="task.latest !== undefined">
+                        <template v-if="task.latestValue !== null">
                           <span class="text-muted-foreground">最新</span>
-                          <span class="font-medium">{{ Math.round(task.latest) }} ms</span>
+                          <span class="font-medium">{{ task.latestValue < 0 ? '探测失败' : `${Math.round(task.latestValue)} ms` }}</span>
                         </template>
-                        <template v-if="task.p50 !== undefined">
+                        <template v-if="task.hasSuccess && task.p50 != null">
                           <span class="text-muted-foreground">P50</span>
                           <span class="font-medium">{{ Math.round(task.p50) }} ms</span>
                         </template>
-                        <template v-if="task.p99 !== undefined">
+                        <template v-if="task.hasSuccess && task.p99 != null">
                           <span class="text-muted-foreground">P99</span>
                           <span class="font-medium">{{ Math.round(task.p99) }} ms</span>
                         </template>
@@ -669,10 +673,10 @@ onBeforeUnmount(() => {
               </TooltipProvider>
               <div class="text-xs mt-1 flex gap-1.5 items-center text-muted-foreground">
                 <span class="font-medium" title="平均延迟">
-                  {{ task.avg !== undefined ? `${Math.round(task.avg)}ms` : '-' }}
+                  {{ task.hasSuccess && task.avg !== undefined ? `${Math.round(task.avg)}ms` : '-' }}
                 </span>
                 <span class="opacity-60">·</span>
-                <span title="丢包率">{{ task.loss.toFixed(2) }}%</span>
+                <span :title="task.type === 'tcp' ? 'TCP 探测失败率' : '探测失败率'">{{ task.loss.toFixed(2) }}%</span>
                 <template v-if="task.p99_p50_ratio !== undefined">
                   <span class="opacity-60">·</span>
                   <span title="波动率">{{ task.p99_p50_ratio.toFixed(2) }}</span>

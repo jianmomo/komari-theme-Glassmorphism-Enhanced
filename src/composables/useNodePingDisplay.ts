@@ -104,7 +104,10 @@ function buildMetricBars(records: PingRecord[], metric: NodePingMetric): NodePin
   const missingCount = Math.max(0, HISTORY_SAMPLE_COUNT - samples.length)
   const bars = samples.map((record, index): NodePingBar => {
     const failed = record.value < 0
-    const value = metric === 'latency' ? record.value : failed ? 100 : 0
+    const lossPercent = Number.isFinite(record.loss_rate)
+      ? Math.min(100, Math.max(0, (record.loss_rate ?? 0) * 100))
+      : failed ? 100 : 0
+    const value = metric === 'latency' ? record.value : lossPercent
     const formattedTime = formatDateTime(record.time, 'HH:mm:ss')
 
     return {
@@ -118,7 +121,7 @@ function buildMetricBars(records: PingRecord[], metric: NodePingMetric): NodePin
         ? `${formattedTime} 检测失败`
         : metric === 'latency'
           ? `${formattedTime} ${Math.round(value)} ms`
-          : `${formattedTime} 0.0%`,
+          : `${formattedTime} ${lossPercent.toFixed(1)}%`,
     }
   })
 
@@ -131,10 +134,36 @@ function buildRowFromRecords(
   taskRecords: PingRecord[],
 ): NodeNetworkQualityRow {
   const successfulValues = taskRecords.filter(record => record.value >= 0).map(record => record.value)
-  const latency = average(successfulValues)
-  const loss = taskRecords.length
-    ? (taskRecords.length - successfulValues.length) / taskRecords.length * 100
-    : null
+  const weightedLatency = taskRecords.reduce((result, record) => {
+    if (record.value < 0)
+      return result
+    const sampleCount = Number.isFinite(record.sample_count) && record.sample_count && record.sample_count > 0
+      ? Math.floor(record.sample_count)
+      : 1
+    const lossRate = Number.isFinite(record.loss_rate)
+      ? Math.min(1, Math.max(0, record.loss_rate ?? 0))
+      : 0
+    const validCount = sampleCount - Math.min(sampleCount, Math.round(sampleCount * lossRate))
+    result.sum += record.value * validCount
+    result.count += validCount
+    return result
+  }, { sum: 0, count: 0 })
+  const totalSamples = taskRecords.reduce((sum, record) => sum + (
+    Number.isFinite(record.sample_count) && record.sample_count && record.sample_count > 0
+      ? Math.floor(record.sample_count)
+      : 1
+  ), 0)
+  const failedSamples = taskRecords.reduce((sum, record) => {
+    const sampleCount = Number.isFinite(record.sample_count) && record.sample_count && record.sample_count > 0
+      ? Math.floor(record.sample_count)
+      : 1
+    const lossRate = Number.isFinite(record.loss_rate)
+      ? Math.min(1, Math.max(0, record.loss_rate ?? 0))
+      : record.value < 0 ? 1 : 0
+    return sum + Math.min(sampleCount, Math.round(sampleCount * lossRate))
+  }, 0)
+  const latency = weightedLatency.count ? weightedLatency.sum / weightedLatency.count : average(successfulValues)
+  const loss = totalSamples ? failedSamples / totalSamples * 100 : null
 
   return {
     carrier: carrierConfig.carrier,
@@ -211,8 +240,11 @@ function buildTunnelRow(
   if (!carrierTask || !tunnelTask)
     return buildRowFromRecords(carrierConfig, carrierTask?.name ?? null, [])
 
-  const carrierRecords = carrierSourceRecords.filter(record => record.task_id === carrierTask.id)
-  const tunnelRecords = tunnelNodeRecords.filter(record => record.task_id === tunnelTask.id)
+  // 组合结果需要逐次配对；聚合桶无法还原两段探测的同次关系。
+  const carrierRecords = carrierSourceRecords.filter(record => record.task_id === carrierTask.id
+    && (record.sample_count ?? 1) === 1)
+  const tunnelRecords = tunnelNodeRecords.filter(record => record.task_id === tunnelTask.id
+    && (record.sample_count ?? 1) === 1)
   const combinedRecords = combineTunnelRecords(carrierRecords, tunnelRecords)
   return buildRowFromRecords(
     carrierConfig,

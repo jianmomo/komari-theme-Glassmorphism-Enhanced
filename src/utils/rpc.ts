@@ -5,6 +5,8 @@
 
 // ==================== 类型定义 ====================
 
+const TRAILING_SLASH_REGEX = /\/$/
+
 /** JSON-RPC 2.0 请求结构 */
 interface JsonRpcRequest {
   jsonrpc: '2.0'
@@ -191,6 +193,10 @@ export interface PingRecord {
   task_id: number
   time: string
   value: number
+  /** 聚合时间桶内的失败比例（0–1）。 */
+  loss_rate?: number
+  /** 聚合时间桶内的原始探测次数。 */
+  sample_count?: number
 }
 
 /** RPC 错误 */
@@ -231,7 +237,7 @@ export class RpcClient {
   private wsConnectPromise: Promise<void> | null = null
 
   constructor(options: RpcClientOptions = {}) {
-    const apiBase = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '')
+    const apiBase = (import.meta.env.VITE_API_BASE || '/api').replace(TRAILING_SLASH_REGEX, '')
     this.baseUrl = options.baseUrl || `${apiBase}/rpc2`
     this.timeout = options.timeout || 30000
     this.useWebSocket = options.useWebSocket || false

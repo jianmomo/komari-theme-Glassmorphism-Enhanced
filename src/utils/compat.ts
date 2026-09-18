@@ -58,6 +58,11 @@ interface CompatibleRecentRecord {
   ping?: NodeStatus['ping']
 }
 
+interface NetworkQualityResponse {
+  records?: PingRecord[]
+  tasks?: CompatiblePingTask[]
+}
+
 function finite(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
@@ -212,11 +217,42 @@ async function getRestPingRecords(uuid: string | undefined, hours: number): Prom
   return { records, tasks: [...tasks.values()] }
 }
 
+/** 优先读取 MAX 已有的 Ping 聚合接口，避免长时间查询只得到近期原始记录。 */
+async function getNetworkQualityRecords(uuid: string | undefined, hours: number): Promise<CompatiblePingRecordsResponse> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 8000)
+  try {
+    const params = new URLSearchParams({ hours: String(hours) })
+    if (uuid)
+      params.set('uuid', uuid)
+    const response = await fetch(`/api/network-quality?${params.toString()}`, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok)
+      throw new Error(`network-quality HTTP ${response.status}`)
+    const payload = await response.json() as NetworkQualityResponse
+    if (!Array.isArray(payload.records) || !Array.isArray(payload.tasks))
+      throw new Error('network-quality response invalid')
+    return { records: payload.records, tasks: payload.tasks }
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+}
+
 /** 获取 Ping 历史；旧版 REST 全局查询会自动合并各节点结果。 */
 export async function getCompatiblePingRecords(
   uuid: string | undefined,
   hours: number,
 ): Promise<CompatiblePingRecordsResponse> {
+  try {
+    return await getNetworkQualityRecords(uuid, hours)
+  }
+  catch (error) {
+    console.warn('[KomariCompat] 网络质量聚合接口不可用，回退 Komari Ping 接口。', error)
+  }
+
   if (Date.now() >= pingRpcRetryAt) {
     try {
       const result = await getSharedRpc().getClient().call<CompatiblePingRecordsResponse>(
